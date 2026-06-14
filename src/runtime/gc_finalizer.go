@@ -58,7 +58,7 @@ var finalizerBits []byte
 // finalizerBitsShortfall returns the required bitmap size or zero.
 // Call it with gcLock held and release the lock before allocation.
 func finalizerBitsShortfall() uintptr {
-	need := (uintptr(endBlock) + 7) / 8
+	need := (blocks + 7) / 8
 	if uintptr(len(finalizerBits)) >= need {
 		return 0
 	}
@@ -75,7 +75,7 @@ func adoptFinalizerBits(buf []byte) {
 	finalizerBits = buf
 }
 
-func finalizerBitIndex(addr uintptr) uintptr { return uintptr(blockFromAddr(addr)) }
+func finalizerBitIndex(addr uintptr) uintptr { return (addr - heapStart) / bytesPerBlock }
 
 func finalizerBitGet(addr uintptr) bool {
 	i := finalizerBitIndex(addr)
@@ -255,7 +255,7 @@ func scanFinalizers() {
 			prev = &n.next
 			continue
 		}
-		if blockFromAddr(addr).findHead().state() == blockStateMark {
+		if gcIsMarked(addr) {
 			// Still reachable; keep the finalizer for a later cycle.
 			prev = &n.next
 			continue
@@ -296,9 +296,8 @@ func scanFinalizers() {
 			// Verify that every pending object survived resurrection.
 			// Otherwise callFinalizer can use memory that sweep freed.
 			for n := finalizerPending; n != nil; n = n.next {
-				// Inside the collection, so the resurrected object is expected
-				// to carry the mark state rather than plain head.
-				if blockFromAddr(decodeFinalizerPtr(n.obj)).findHead().state() != blockStateMark {
+				// Inside the collection, so the resurrected object must be visited.
+				if !gcIsMarked(decodeFinalizerPtr(n.obj)) {
 					runtimeFatal("gc: pending finalizer object was not resurrected")
 				}
 			}
@@ -353,8 +352,8 @@ func dequeueFinalizer() (*finalizerEntry, unsafe.Pointer) {
 				runtimeFatal("gc: dequeued finalizer for an object off the heap")
 			}
 			// A pending object must remain allocated until its finalizer runs.
-			// Check the block state because this runs after marks become heads.
-			if blockFromAddr(addr).state() == blockStateFree {
+			// This runs after the sweep, so check the free list.
+			if gcIsFree(addr) {
 				runtimeFatal("gc: dequeued finalizer for a freed object")
 			}
 		}
