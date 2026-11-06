@@ -55,6 +55,7 @@ func alloc(size uintptr, layout unsafe.Pointer) unsafe.Pointer {
 		// Try to increase the heap and check again.
 		// Use > instead of >= because an allocation that exactly
 		// ends at heapEnd is still within heap boundaries.
+		heapGrowRequest = heapptr - heapEnd
 		if growHeap() {
 			continue
 		}

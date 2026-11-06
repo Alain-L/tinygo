@@ -91,9 +91,17 @@ func saveStackPointer() {
 // growHeap tries to grow the heap size. It returns true if it succeeds, false
 // otherwise.
 func growHeap() bool {
-	// Grow memory by the available size, which means the heap size is doubled.
-	memorySize := wasm_memory_size(wasmMemoryIndex)
-	result := wasm_memory_grow(wasmMemoryIndex, memorySize)
+	// Grow by half the memory, or enough for the pending allocation if that is
+	// bigger. Fall back to the allocation size when the larger grow fails.
+	pages := wasm_memory_size(wasmMemoryIndex)/2 + 1
+	need := int32(heapGrowRequest/wasmPageSize + heapGrowRequest/(wasmPageSize*16) + 1)
+	if need > pages {
+		pages = need
+	}
+	result := wasm_memory_grow(wasmMemoryIndex, pages)
+	if result == -1 && need < pages {
+		result = wasm_memory_grow(wasmMemoryIndex, need)
+	}
 	if result == -1 {
 		// Grow failed.
 		return false
