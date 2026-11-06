@@ -335,6 +335,7 @@ func alloc(size uintptr, layout unsafe.Pointer) unsafe.Pointer {
 	var ranGC bool
 	var grewHeap bool
 	var pointer unsafe.Pointer
+	heapGrowRequest = neededBlocks * bytesPerBlock
 	for {
 		pointer = gcClaimBlocks(neededBlocks)
 		if pointer != nil {

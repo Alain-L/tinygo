@@ -4,6 +4,9 @@ package runtime
 
 import "unsafe"
 
+// Bytes still missing for the allocation that calls growHeap.
+var heapGrowRequest uintptr
+
 // Special alloc function that should never actually be called.
 // It is used instead of normal alloc in //go:noheap functions, and must either
 // be optimized away or throw a linker error.
