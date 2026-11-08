@@ -334,36 +334,10 @@ func alloc(size uintptr, layout unsafe.Pointer) unsafe.Pointer {
 	// Acquire a range of free blocks.
 	var ranGC bool
 	var grewHeap bool
-	var endAddr uintptr
+	var pointer unsafe.Pointer
 	for {
-		// Search the free ranges length list for neededBlocks.
-		remDst := &freeRanges
-		for *remDst != nil && (*remDst).len < neededBlocks {
-			remDst = &(*remDst).nextLen
-		}
-		rangeWithLength := *remDst
-		if rangeWithLength != nil {
-			// We found a sufficiently-long range.
-			removedLen := rangeWithLength.len
-
-			// Remove the range.
-			if nextWithLen := rangeWithLength.nextWithLen; nextWithLen != nil {
-				// Remove from the list with this length.
-				rangeWithLength.nextWithLen = nextWithLen.nextWithLen
-				endAddr = uintptr(unsafe.Pointer(nextWithLen)) + unsafe.Sizeof(freeRangeMore{})
-			} else {
-				// Remove from the list of lengths.
-				*remDst = rangeWithLength.nextLen
-				endAddr = uintptr(unsafe.Pointer(rangeWithLength)) + unsafe.Sizeof(freeRange{})
-			}
-
-			if removedLen > neededBlocks {
-				// Insert the leftover range.
-				leftover := removedLen - neededBlocks
-				insertFreeRange(endAddr, leftover)
-				endAddr -= leftover * bytesPerBlock
-			}
-
+		pointer = gcClaimBlocks(neededBlocks)
+		if pointer != nil {
 			break
 		}
 
@@ -407,12 +381,8 @@ func alloc(size uintptr, layout unsafe.Pointer) unsafe.Pointer {
 		runtimeFatal("out of memory")
 	}
 
-	// Add the new object to the ends bitmap.
-	endBlock := ((endAddr - heapStart) / bytesPerBlock) - 1
-	*(*gcMask)(unsafe.Pointer(endBlocksBitmap + maskSizeBytes*(endBlock/maskSizeBits))) |= 1 << (endBlock % maskSizeBits)
-
 	// Create the object header.
-	header := (*objHeader)(unsafe.Pointer(endAddr - unsafe.Sizeof(objHeader{})))
+	header := (*objHeader)(unsafe.Add(pointer, size-unsafe.Sizeof(objHeader{})))
 	header.next = 0
 	header.layout = parseGCLayout(layout)
 
@@ -425,16 +395,57 @@ func alloc(size uintptr, layout unsafe.Pointer) unsafe.Pointer {
 		wakeFinalizer()
 	}
 
-	// Return a pointer to this allocation.
-	pointer := unsafe.Pointer(endAddr - size)
 	size -= unsafe.Sizeof(objHeader{})
 	if gcDebug {
-		println("alloc", pointer, "-", endAddr, "size:", size)
+		println("alloc", pointer, "size:", size)
 	}
 	memzero(pointer, size)
 
 	// Return a pointer to this allocation.
 	return pointer
+}
+
+// gcClaimBlocks claims neededBlocks blocks and returns their start, or nil.
+// Not inlined, so alloc holds the start and not the end address across gcLock.Unlock.
+//
+//go:noinline
+//go:nobounds
+func gcClaimBlocks(neededBlocks uintptr) unsafe.Pointer {
+	// Search the free ranges length list for neededBlocks.
+	remDst := &freeRanges
+	for *remDst != nil && (*remDst).len < neededBlocks {
+		remDst = &(*remDst).nextLen
+	}
+	rangeWithLength := *remDst
+	if rangeWithLength == nil {
+		return nil
+	}
+	removedLen := rangeWithLength.len
+
+	// Remove the range.
+	var endAddr uintptr
+	if nextWithLen := rangeWithLength.nextWithLen; nextWithLen != nil {
+		// Remove from the list with this length.
+		rangeWithLength.nextWithLen = nextWithLen.nextWithLen
+		endAddr = uintptr(unsafe.Pointer(nextWithLen)) + unsafe.Sizeof(freeRangeMore{})
+	} else {
+		// Remove from the list of lengths.
+		*remDst = rangeWithLength.nextLen
+		endAddr = uintptr(unsafe.Pointer(rangeWithLength)) + unsafe.Sizeof(freeRange{})
+	}
+
+	if removedLen > neededBlocks {
+		// Insert the leftover range.
+		leftover := removedLen - neededBlocks
+		insertFreeRange(endAddr, leftover)
+		endAddr -= leftover * bytesPerBlock
+	}
+
+	// Add the new object to the ends bitmap.
+	endBlock := ((endAddr - heapStart) / bytesPerBlock) - 1
+	*(*gcMask)(unsafe.Pointer(endBlocksBitmap + maskSizeBytes*(endBlock/maskSizeBits))) |= 1 << (endBlock % maskSizeBits)
+
+	return unsafe.Pointer(endAddr - neededBlocks*bytesPerBlock)
 }
 
 // allocManual allocates pointer-free memory that remains live until freeManual.
