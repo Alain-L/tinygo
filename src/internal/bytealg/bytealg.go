@@ -9,6 +9,11 @@ package bytealg
 //
 // This is indicated specifically in the file.
 
+import (
+	"math/bits"
+	"unsafe"
+)
+
 const (
 	// Index can search any valid length of string.
 
@@ -126,19 +131,33 @@ func Index(a, b []byte) int {
 // Index finds the index of the first instance of the specified byte in the slice.
 // If the byte is not found, this returns -1.
 func IndexByte(b []byte, c byte) int {
-	for i, v := range b {
-		if v == c {
-			return i
-		}
-	}
-	return -1
+	return indexByte(unsafe.Pointer(unsafe.SliceData(b)), len(b), c)
 }
 
 // Index finds the index of the first instance of the specified byte in the string.
 // If the byte is not found, this returns -1.
 func IndexByteString(s string, c byte) int {
-	for i := 0; i < len(s); i++ {
-		if s[i] == c {
+	return indexByte(unsafe.Pointer(unsafe.StringData(s)), len(s), c)
+}
+
+// indexByte checks 8 bytes at a time. The loads have byte alignment, so
+// LLVM only merges them on targets that allow unaligned access.
+func indexByte(p unsafe.Pointer, n int, c byte) int {
+	const lo = 0x0101010101010101
+	const hi = 0x8080808080808080
+	m := uint64(c) * lo
+	i := 0
+	for ; i+8 <= n; i += 8 {
+		w := (*[8]byte)(unsafe.Add(p, i))
+		x := uint64(w[0]) | uint64(w[1])<<8 | uint64(w[2])<<16 | uint64(w[3])<<24 |
+			uint64(w[4])<<32 | uint64(w[5])<<40 | uint64(w[6])<<48 | uint64(w[7])<<56
+		x ^= m
+		if t := (x - lo) &^ x & hi; t != 0 {
+			return i + bits.TrailingZeros64(t)>>3
+		}
+	}
+	for ; i < n; i++ {
+		if *(*byte)(unsafe.Add(p, i)) == c {
 			return i
 		}
 	}
